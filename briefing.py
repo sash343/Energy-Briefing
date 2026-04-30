@@ -1,24 +1,20 @@
 """
 Morning Energy Briefing — Daily Auto-Texter
-Runs every day at 7:00 AM, fetches top 10 energy & market headlines
-via Anthropic API (with web search), then sends SMS via Twilio.
-
-Setup: see README.md
+Fetches top energy & market headlines via NewsAPI,
+then sends SMS via Twilio.
 """
 
 import os
-import json
-import anthropic
+import requests
 from twilio.rest import Client
 from datetime import datetime
 
-# ── Config (set these as environment variables) ──────────────────────────────
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+# ── Config ────────────────────────────────────────────────────────────────────
+NEWS_API_KEY       = os.environ["NEWS_API_KEY"]
 TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
 TWILIO_AUTH_TOKEN  = os.environ["TWILIO_AUTH_TOKEN"]
-TWILIO_FROM_NUMBER = os.environ["TWILIO_FROM_NUMBER"]   # e.g. +12015550100
+TWILIO_FROM_NUMBER = os.environ["TWILIO_FROM_NUMBER"]
 
-# Add every recipient's number here
 RECIPIENT_NUMBERS = [
     os.environ.get("RECIPIENT_1", ""),
     os.environ.get("RECIPIENT_2", ""),
@@ -26,49 +22,30 @@ RECIPIENT_NUMBERS = [
     os.environ.get("RECIPIENT_4", ""),
     os.environ.get("RECIPIENT_5", ""),
 ]
-RECIPIENT_NUMBERS = [n for n in RECIPIENT_NUMBERS if n]   # drop blanks
+RECIPIENT_NUMBERS = [n for n in RECIPIENT_NUMBERS if n]
 
 # ── Fetch headlines ───────────────────────────────────────────────────────────
 def fetch_headlines() -> list[dict]:
-    today = datetime.now().strftime("%B %d, %Y")
-    prompt = f"""Today is {today}. Search the web and find the 10 most important
-news articles from TODAY about the energy sector (oil, gas, renewables,
-utilities, energy policy) and financial markets broadly.
-
-Prioritize: WSJ, NYT, Bloomberg, Reuters, FT, CNBC.
-Include a mix of energy-specific and broader market stories
-relevant to energy investors.
-
-Respond ONLY with a JSON array of exactly 10 objects — no preamble,
-no markdown, no backticks. Each object must have:
-  "title"  : headline text
-  "url"    : full article URL
-  "source" : publication (e.g. "WSJ", "Bloomberg")
-  "summary": one sentence (max 15 words) on why it matters
-
-Return only the raw JSON array."""
-
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1000,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    text_block = next((b for b in response.content if b.type == "text"), None)
-    if not text_block:
-        raise ValueError("No text in API response")
-
-    raw = text_block.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    return json.loads(raw)[:10]
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        "q": "energy OR oil OR gas OR renewables OR utilities OR electricity markets",
+        "language": "en",
+        "sortBy": "publishedAt",
+        "pageSize": 10,
+        "apiKey": NEWS_API_KEY,
+        "domains": "wsj.com,reuters.com,bloomberg.com,cnbc.com,ft.com,nytimes.com",
+    }
+    response = requests.get(url, params=params)
+    response.raise_for_status()
+    articles = response.json().get("articles", [])[:10]
+    return articles
 
 
 # ── Build SMS message ─────────────────────────────────────────────────────────
 def build_message(articles: list[dict]) -> str:
     today = datetime.now().strftime("%A, %B %d")
     lines = "\n\n".join(
-        f"{i+1}. [{a['source']}] {a['title']}\n{a['url']}"
+        f"{i+1}. [{a['source']['name']}] {a['title']}\n{a['url']}"
         for i, a in enumerate(articles)
     )
     return f"☀️ Energy & Market Briefing — {today}\n\n{lines}"
